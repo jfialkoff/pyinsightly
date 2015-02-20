@@ -2,6 +2,7 @@ import datetime
 import logging
 import re
 from base64 import b64encode
+from collections import UserDict
 from urllib.parse import urlencode
 
 import requests
@@ -31,6 +32,22 @@ class UTC(datetime.tzinfo):
         return ZERO
 
 utc = pytz.utc if pytz else UTC()
+
+class InsightlyDict(UserDict):
+    def get_custom_field(self, key, *args):
+        try:
+            custom_fields = self.data['CUSTOMFIELDS']
+        except KeyError:
+            if args:
+                return args[0]
+            raise KeyError('%s' % key)
+
+        for field in custom_fields:
+            if field['CUSTOM_FIELD_ID'] == key:
+                return field['FIELD_VALUE']
+        if args:
+            return args[0]
+        raise KeyError('%s' % key)
 
 class Insightly(object):
     BASE_URL = 'https://api.insight.ly/v2.1'
@@ -81,13 +98,13 @@ class Insightly(object):
         url = self._construct_url(object_type, **kwargs)
         resp = requests.post(url, json=data, headers=self._get_headers())
         resp.raise_for_status()
-        return resp.json()
+        return InsightlyDict(resp.json())
 
     def get(self, object_type, obj_id, **kwargs):
         url = self._construct_url(object_type, obj_id, **kwargs)
         resp = requests.get(url, headers=self._get_headers())
         resp.raise_for_status()
-        return resp.json()
+        return InsightlyDict(resp.json())
 
     def delete(self, object_type, obj_id, **kwargs):
         url = self._construct_url(object_type, obj_id, **kwargs)
@@ -150,14 +167,15 @@ class Insightly(object):
         url = self._construct_url(object_type, parents=parents)
         resp = requests.get(url, params=params, headers=self._get_headers())
         resp.raise_for_status()
-        return resp.json()
+
+        return [InsightlyDict(obj) for obj in resp.json()]
 
     def update(self, object_type, obj_id, data):
         data['ORGANISATION_ID'] = obj_id
         url = self._construct_url(object_type)
         resp = requests.put(url, json=data, headers=self._get_headers())
         resp.raise_for_status()
-        return resp.json()
+        return InsightlyDict(resp.json())
 
     def test(self):
         now = datetime.datetime.utcnow().replace(tzinfo=utc)
