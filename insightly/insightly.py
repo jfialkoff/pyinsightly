@@ -3,9 +3,18 @@ import logging
 import re
 from base64 import b64encode
 from collections import UserDict
+from http import client
 from urllib.parse import urlencode
 
 import requests
+
+__all__ = ('Insightly', 'InsightlyError', 'Unauthorized', 'Forbidden')
+
+DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+class InsightlyError(Exception): pass
+class Unauthorized(InsightlyError): pass
+class Forbidden(InsightlyError): pass
 
 try:
     import pytz
@@ -94,22 +103,57 @@ class Insightly(object):
         print(url)
         return url
 
+    def _replace_dates(self, data):
+        todo = list([key] for key in data.keys())
+        new_data = {}
+        while todo:
+            keys = todo.pop()
+            key = keys.pop()
+            data_root = data
+            new_data_root = new_data
+            for k in keys:
+                data_root = data_root[k]
+                new_data_root = new_data_root[k]
+            val = data_root[key]
+            if isinstance(val, (tuple, list)):
+                new_data_root[key] = [None] * len(val)
+                for item_i, item in enumerate(val):
+                    todo.append(keys + [key, item_i])
+            elif isinstance(val, dict):
+                new_data_root[key] = {}
+                for child_key in val.keys():
+                    todo.append(keys + [key, child_key])
+            else:
+                if isinstance(val, (datetime.datetime, datetime.date)):
+                    val = datetime.datetime.strftime(val, DATETIME_FORMAT)
+                new_data_root[key] = val
+        return new_data
+
+    def raise_for_status(self, resp):
+        if resp.ok: return
+        if resp.status_code == client.UNAUTHORIZED:
+            raise Unauthorized()
+        elif resp.status_code == client.FORBIDDEN:
+            raise Forbidden()
+        resp.raise_for_status()
+
     def add(self, object_type, data, **kwargs):
         url = self._construct_url(object_type, **kwargs)
+        data = self._replace_dates(data)
         resp = requests.post(url, json=data, headers=self._get_headers())
-        resp.raise_for_status()
+        self.raise_for_status(resp)
         return InsightlyDict(resp.json())
 
     def get(self, object_type, obj_id, **kwargs):
         url = self._construct_url(object_type, obj_id, **kwargs)
         resp = requests.get(url, headers=self._get_headers())
-        resp.raise_for_status()
+        self.raise_for_status(resp)
         return InsightlyDict(resp.json())
 
     def delete(self, object_type, obj_id, **kwargs):
         url = self._construct_url(object_type, obj_id, **kwargs)
         resp = requests.delete(url, headers=self._get_headers())
-        resp.raise_for_status()
+        self.raise_for_status(resp)
         return
 
     def list(self, object_type, parents=None, order_by=None, top=None,
@@ -166,15 +210,14 @@ class Insightly(object):
 
         url = self._construct_url(object_type, parents=parents)
         resp = requests.get(url, params=params, headers=self._get_headers())
-        resp.raise_for_status()
-
+        self.raise_for_status(resp)
         return [InsightlyDict(obj) for obj in resp.json()]
 
-    def update(self, object_type, obj_id, data):
-        data['ORGANISATION_ID'] = obj_id
+    def update(self, object_type, data):
         url = self._construct_url(object_type)
+        data = self._replace_dates(data)
         resp = requests.put(url, json=data, headers=self._get_headers())
-        resp.raise_for_status()
+        self.raise_for_status(resp)
         return InsightlyDict(resp.json())
 
     def test(self):

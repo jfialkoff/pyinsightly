@@ -1,1 +1,1 @@
-from .insightly import Insightly
+from .insightly import *
